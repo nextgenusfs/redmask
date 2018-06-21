@@ -9,8 +9,8 @@ redmask.py -i genome.fa -o mygenome
 ```
 This will run the masking generating the following files:
 
+```
 mygenome.softmasked.fa -- soft-masked genome
 mygenome.repeats.bed -- BED file of repeats
 mygenome.repeats.fasta -- FASTA file of masked sequences (putative repeats)
-
-
+````
