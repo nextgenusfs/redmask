@@ -22,7 +22,12 @@ parser = argparse.ArgumentParser(prog='redmask.py',
 parser.add_argument('-i', '--genome', required=True, help='genome assembly FASTA format')
 parser.add_argument('-o', '--output', required=True, help='Output basename')
 parser.add_argument('-m', '--min', default=3, type=int, help='Minimum number of observed k-mers')
-parser.add_argument('-t', '--training', default=1000, type=int, help='Min length for training')
+parser.add_argument('--training', default=1000, type=int, help='Min length for training')
+parser.add_argument('-l', '--word_len', type=int, help='word length (kmer length)')
+parser.add_argument('-t', '--threshold', type=int, help='threshold of low adjusted scores of non-repeats')
+parser.add_argument('-g', '--gaussian', type=int, help='Gaussian smoothing width')
+parser.add_argument('-c', '--markov_order', type=int, help='Order of background markov chain')
+parser.add_argument('--debug', action='store_true', help='Keep intermediate files')
 parser.add_argument('--version', action='version', version='%(prog)s v{version}'.format(version=__version__))
 args=parser.parse_args()
 
@@ -95,10 +100,10 @@ os.makedirs(trainDir)
 with open(logfile, 'w') as log:
     calcN50 = n50(args.genome)
     sys.stdout.write('[{:}] Loading assembly with N50 of {:,} bp\n'.format(datetime.datetime.now().strftime('%b %d %I:%M %p'), calcN50))
-    sys.stdout.write('[{:}] Splitting genome assembly into training set (contigs > N50)\n'.format(datetime.datetime.now().strftime('%b %d %I:%M %p')))
+    sys.stdout.write('[{:}] Splitting genome assembly into training set (contigs > {:} bp)\n'.format(datetime.datetime.now().strftime('%b %d %I:%M %p'), args.training))
     with open(args.genome, 'rU') as input:
         for rec in SeqIO.parse(input, 'fasta'):
-            if len(rec.seq) >= args.training: #calcN50:
+            if len(rec.seq) >= args.training:
                 with open(os.path.join(trainDir,rec.id+'.fa'), 'w') as output:
                     SeqIO.write(rec, output, 'fasta')
             else:
@@ -106,6 +111,14 @@ with open(logfile, 'w') as log:
                     SeqIO.write(rec, output, 'fasta')
     sys.stdout.write('[{:}] Finding repeats with Red (REpeat Detector)\n'.format(datetime.datetime.now().strftime('%b %d %I:%M %p')))
     cmd = ['Red', '-gnm', trainDir, '-dir', inputDir, '-sco', outputDir, '-min', str(args.min), '-msk', outputDir]
+    if args.gaussian:
+    	cmd = cmd + ['-gau', str(args.gaussian)]
+    if args.threshold:
+    	cmd = cmd + ['-thr', str(args.threshold)]
+    if args.word_len:
+    	cmd = cmd + ['-len', str(args.word_len)]
+    if args.markov_order:
+    	cmd = cmd + ['-ord', str(args.markov_order)]
     subprocess.call(cmd, stdout=log, stderr=log)
     
     sys.stdout.write('[{:}] Collecting results from Red\n'.format(datetime.datetime.now().strftime('%b %d %I:%M %p')))
@@ -153,6 +166,7 @@ with open(logfile, 'w') as log:
     sys.stdout.write('\nMasked genome: {:}\nnum scaffolds: {:,}\nassembly size: {:,} bp\nmasked repeats: {:,} bp ({:.2f}%)\n\n'.format(os.path.abspath(maskedOut), len(masked), GenomeLength, maskedSize, percentMask*100))
 
 #clean up
-SafeRemove(inputDir)
-SafeRemove(trainDir)
-SafeRemove(outputDir)
+if not args.debug:
+	SafeRemove(inputDir)
+	SafeRemove(trainDir)
+	SafeRemove(outputDir)
