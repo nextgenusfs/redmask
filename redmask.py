@@ -54,6 +54,43 @@ def group(L):
 def n_lower_chars(string):
     return sum(1 for c in string if c.islower())
 
+#via https://stackoverflow.com/questions/2154249/identify-groups-of-continuous-numbers-in-a-list
+def list2groups(L):
+    if len(L) < 1:
+        return
+    first = last = L[0]
+    for n in L[1:]:
+        if n - 1 == last: # Part of the group, bump the end
+            last = n
+        else: # Not part of the group, yield current group and start a new
+            yield first, last
+            first = last = n
+    yield first, last # Yield the last group
+
+def maskingstats2bed(input, counter):
+    from Bio.SeqIO.FastaIO import SimpleFastaParser
+    masked = []
+    maskedSize = 0
+    bedfilename = input.replace('.msk', '.bed')
+    with open(input, 'rU') as infile:
+        for header, Seq in SimpleFastaParser(infile):
+            if ' ' in header:
+                ID = header.split(' ')[0]
+            else:
+                ID = header
+            for i,c in enumerate(Seq):
+                if c.islower():
+                    masked.append(i) #0 based
+                    maskedSize += 1
+    if maskedSize > 0: #not softmasked, return False
+        with open(bedfilename, 'w') as bedout:
+            repeats = list(list2groups(masked))
+            for item in repeats:
+                if len(item) == 2:
+                    bedout.write('{:}\t{:}\t{:}\tRepeat_{:}\n'.format(ID, item[0], item[1], counter))
+                    counter += 1
+    return maskedSize, counter
+
 def n50(input):
     lengths = []
     with open(input, 'rU') as infile:
@@ -97,12 +134,15 @@ os.makedirs(inputDir)
 os.makedirs(outputDir)
 os.makedirs(trainDir)
 
+Scaffolds = {}
 with open(logfile, 'w') as log:
     calcN50 = n50(args.genome)
     sys.stdout.write('[{:}] Loading assembly with N50 of {:,} bp\n'.format(datetime.datetime.now().strftime('%b %d %I:%M %p'), calcN50))
     sys.stdout.write('[{:}] Splitting genome assembly into training set (contigs > {:} bp)\n'.format(datetime.datetime.now().strftime('%b %d %I:%M %p'), args.training))
     with open(args.genome, 'rU') as input:
         for rec in SeqIO.parse(input, 'fasta'):
+            if not rec.id in Scaffolds:
+                Scaffolds[rec.id] = len(rec.seq)
             if len(rec.seq) >= args.training:
                 with open(os.path.join(trainDir,rec.id+'.fa'), 'w') as output:
                     SeqIO.write(rec, output, 'fasta')
@@ -110,15 +150,15 @@ with open(logfile, 'w') as log:
                 with open(os.path.join(inputDir,rec.id+'.fa'), 'w') as output:
                     SeqIO.write(rec, output, 'fasta')
     sys.stdout.write('[{:}] Finding repeats with Red (REpeat Detector)\n'.format(datetime.datetime.now().strftime('%b %d %I:%M %p')))
-    cmd = ['Red', '-gnm', trainDir, '-dir', inputDir, '-sco', outputDir, '-min', str(args.min), '-msk', outputDir]
+    cmd = ['Red', '-gnm', trainDir, '-dir', inputDir, '-min', str(args.min), '-msk', outputDir]
     if args.gaussian:
-    	cmd = cmd + ['-gau', str(args.gaussian)]
+        cmd = cmd + ['-gau', str(args.gaussian)]
     if args.threshold:
-    	cmd = cmd + ['-thr', str(args.threshold)]
+        cmd = cmd + ['-thr', str(args.threshold)]
     if args.word_len:
-    	cmd = cmd + ['-len', str(args.word_len)]
+        cmd = cmd + ['-len', str(args.word_len)]
     if args.markov_order:
-    	cmd = cmd + ['-ord', str(args.markov_order)]
+        cmd = cmd + ['-ord', str(args.markov_order)]
     subprocess.call(cmd, stdout=log, stderr=log)
     
     sys.stdout.write('[{:}] Collecting results from Red\n'.format(datetime.datetime.now().strftime('%b %d %I:%M %p')))
@@ -127,46 +167,31 @@ with open(logfile, 'w') as log:
     for file in os.listdir(outputDir):
         if file.endswith('.msk'):
             maskedfiles.append(os.path.join(outputDir, file))
-    with open(maskedOut, 'w') as outfile:
-        for fname in natsorted(maskedfiles):
-            with open(fname) as infile:
-                for line in infile:
-                    outfile.write(line)
     
     sys.stdout.write('[{:}] Summarizing results and converting to BED format\n'.format(datetime.datetime.now().strftime('%b %d %I:%M %p')))
     maskedBED = args.output+'.repeats.bed'
     maskedFA = args.output+'.repeats.fasta'
-    #load contig names and sizes into dictionary, get masked repeat stats
-    GenomeLength = 0
     maskedSize = 0
-    masked = {}
-    with open(maskedOut, 'rU') as input:
-        for rec in SeqIO.parse(input, 'fasta'):
-            if not rec.id in masked:
-                masked[rec.id] = []
-            Seq = str(rec.seq)
-            GenomeLength += len(Seq)
-            maskedSize += n_lower_chars(Seq)
-            for i,c in enumerate(Seq):
-                if c.islower():
-                    masked[rec.id].append(i) #0 based
-    counter = 1
-    SeqRecords = SeqIO.to_dict(SeqIO.parse(maskedOut, "fasta"))
+    num = 1
+    with open(maskedOut, 'w') as outfile:
+        for fname in natsorted(maskedfiles):
+            masksize, num = maskingstats2bed(fname, num)
+            maskedSize += masksize
+            with open(fname) as infile:
+                for line in infile:
+                    outfile.write(line)
     with open(maskedBED, 'w') as bedout:
-        with open(maskedFA, 'w') as faout:   
-            for k,v in natsorted(masked.items()):
-                repeats = list(group(v))
-                for item in repeats:
-                    if len(item) == 2:
-                        bedout.write('{:}\t{:}\t{:}\tRepeat_{:}\n'.format(k,item[0], item[1], counter))
-                        faout.write('>Repeat_{:} {:}\n{:}\n'.format(counter, k, SeqRecords[k][int(item[0]):int(item[1])].seq))
-                        counter += 1
-
+        for file in natsorted(os.listdir(outputDir)):
+            if file.endswith('.bed'):
+                with open(os.path.join(outputDir, file), 'rU') as infile:
+                    bedout.write(infile.read())
+    #get masked repeat stats
+    GenomeLength = sum(Scaffolds.values())
     percentMask = maskedSize / float(GenomeLength)
-    sys.stdout.write('\nMasked genome: {:}\nnum scaffolds: {:,}\nassembly size: {:,} bp\nmasked repeats: {:,} bp ({:.2f}%)\n\n'.format(os.path.abspath(maskedOut), len(masked), GenomeLength, maskedSize, percentMask*100))
+    sys.stdout.write('\nMasked genome: {:}\nnum scaffolds: {:,}\nassembly size: {:,} bp\nmasked repeats: {:,} bp ({:.2f}%)\n\n'.format(os.path.abspath(maskedOut), len(Scaffolds), GenomeLength, maskedSize, percentMask*100))
 
 #clean up
 if not args.debug:
-	SafeRemove(inputDir)
-	SafeRemove(trainDir)
-	SafeRemove(outputDir)
+    SafeRemove(inputDir)
+    SafeRemove(trainDir)
+    SafeRemove(outputDir)
