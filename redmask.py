@@ -10,7 +10,7 @@ import shutil
 from Bio import SeqIO
 from natsort import natsorted
 
-__version__ = "0.0.1"
+__version__ = "0.0.2"
 #setup menu with argparse
 class MyFormatter(argparse.ArgumentDefaultsHelpFormatter):
     def __init__(self, prog):
@@ -106,7 +106,7 @@ def n50(input):
     else:
         medianpos = int(len(nlist) / 2)
         N50 = int(nlist[medianpos])
-    return N50
+    return N50, len(lengths), sum(lengths)
 
 def SafeRemove(input):
     if os.path.isdir(input):
@@ -115,6 +115,12 @@ def SafeRemove(input):
         os.remove(input)
     else:
         return
+        
+def softwrap(string, every=80):
+    lines = []
+    for i in xrange(0, len(string), every):
+        lines.append(string[i:i+every])
+    return '\n'.join(lines)
 
 sys.stdout.write('[{:}] Running Python v{:} \n'.format(datetime.datetime.now().strftime('%b %d %I:%M %p'), platform.python_version()))
 dependencies = ['Red']
@@ -136,8 +142,9 @@ os.makedirs(trainDir)
 
 Scaffolds = {}
 with open(logfile, 'w') as log:
-    calcN50 = n50(args.genome)
-    sys.stdout.write('[{:}] Loading assembly with N50 of {:,} bp\n'.format(datetime.datetime.now().strftime('%b %d %I:%M %p'), calcN50))
+    calcN50, numContigs, lenContigs = n50(args.genome)
+    sys.stdout.write('[{:}] Loading assembly:\n    Contigs: {:,}\n    Length:  {:,} bp\n    nN50:    {:,} bp\n'.format(
+    					datetime.datetime.now().strftime('%b %d %I:%M %p'), numContigs, lenContigs, calcN50))
     sys.stdout.write('[{:}] Splitting genome assembly into training set (contigs > {:} bp)\n'.format(datetime.datetime.now().strftime('%b %d %I:%M %p'), args.training))
     with open(args.genome, 'rU') as input:
         for rec in SeqIO.parse(input, 'fasta'):
@@ -185,10 +192,24 @@ with open(logfile, 'w') as log:
             if file.endswith('.bed'):
                 with open(os.path.join(outputDir, file), 'rU') as infile:
                     bedout.write(infile.read())
+    #generate masked fasta sequences
+    SeqRecords = SeqIO.to_dict(SeqIO.parse(maskedOut, 'fasta'))
+    with open(maskedFA, 'w') as outfile:
+    	with open(maskedBED, 'rU') as infile:
+    		for line in infile:
+    			if line.startswith('#') or line.startswith('\n'):
+    				continue
+    			line = line.strip()
+    			contig, start, end, name = line.split('\t')
+    			Seq = str(SeqRecords[contig][int(start):int(end)].seq)
+    			outfile.write('>{:}\n{:}\n'.format(name, softwrap(Seq)))
+
     #get masked repeat stats
     GenomeLength = sum(Scaffolds.values())
     percentMask = maskedSize / float(GenomeLength)
-    sys.stdout.write('\nMasked genome: {:}\nnum scaffolds: {:,}\nassembly size: {:,} bp\nmasked repeats: {:,} bp ({:.2f}%)\n\n'.format(os.path.abspath(maskedOut), len(Scaffolds), GenomeLength, maskedSize, percentMask*100))
+    sys.stdout.write('\nMasked genome: {:}\nRepeat BED file: {:}\nRepeat FASTA file: {:}\nnum scaffolds: {:,}\nassembly size: {:,} bp\nmasked repeats: {:,} bp ({:.2f}%)\n\n'.format(
+    				 os.path.abspath(maskedOut), os.path.abspath(maskedBED), os.path.abspath(maskedFA), 
+    				 len(Scaffolds), GenomeLength, maskedSize, percentMask*100))
 
 #clean up
 if not args.debug:
